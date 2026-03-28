@@ -11,7 +11,17 @@ import onnxruntime
 import torch
 import onnx
 from torchvision.transforms import v2
-from PySide6 import QtCore
+try:
+    from PySide6 import QtCore
+except ImportError:
+    class MockQtCore:
+        class QObject:
+            pass
+        class Signal:
+            def __init__(self, *args, **kwargs): pass
+            def emit(self, *args, **kwargs): pass
+            def connect(self, *args, **kwargs): pass
+    QtCore = MockQtCore()
 try:
     import tensorrt as trt
     TENSORRT_AVAILABLE = True
@@ -44,9 +54,24 @@ class ModelsProcessor(QtCore.QObject):
     processing_complete = QtCore.Signal()
     model_loaded = QtCore.Signal()  # Signal emitted with Onnx InferenceSession
 
-    def __init__(self, main_window: 'MainWindow', device='cuda'):
+    def __init__(self, controls: dict, parameters: dict, device='cuda'):
         super().__init__()
-        self.main_window = main_window
+        self.controls = controls
+        self.parameters = parameters
+        
+        # MOCK MAIN WINDOW FOR HEADLESS EXECUTION
+        class DummyMainWindow:
+            class DummySignal:
+                def emit(self, *args, **kwargs): pass
+            def __init__(self):
+                self.model_loading_signal = self.DummySignal()
+                self.model_loaded_signal = self.DummySignal()
+                self.dfm_models_data = {}
+                class DummyDialog:
+                    def show(self): pass
+                    def close(self): pass
+                self.model_load_dialog = DummyDialog()
+        self.main_window = DummyMainWindow()
         self.provider_name = 'TensorRT'
         self.device = device
         self.model_lock = threading.RLock()  # Reentrant lock for model access
@@ -74,6 +99,12 @@ class ModelsProcessor(QtCore.QObject):
         self.models_data = {}
         for model_data in models_list:
             model_name, model_path = model_data['model_name'], model_data['local_path']
+            
+            # Rewrite path if ModelsDir is overridden (e.g. for headless volume mounting)
+            models_dir = self.controls.get('ModelsDir', './model_assets')
+            if model_path.startswith('./model_assets'):
+                model_path = model_path.replace('./model_assets', models_dir)
+                
             self.models[model_name] = None #Model Instance
             self.models_path[model_name] = model_path
             self.models_data[model_name] = {'local_path': model_data['local_path'], 'hash': model_data['hash'], 'url': model_data.get('url')}
@@ -86,6 +117,12 @@ class ModelsProcessor(QtCore.QObject):
             self.models_trt_path = {}
             for model_data in models_trt_list:
                 model_name, model_path = model_data['model_name'], model_data['local_path']
+                
+                # Rewrite path if ModelsDir is overridden
+                models_dir = self.controls.get('ModelsDir', './model_assets')
+                if model_path.startswith('./model_assets'):
+                    model_path = model_path.replace('./model_assets', models_dir)
+                    
                 self.models_trt[model_name] = None #Model Instance
                 self.models_trt_path[model_name] = model_path
 
@@ -126,8 +163,10 @@ class ModelsProcessor(QtCore.QObject):
         with self.model_lock:
             self.main_window.model_loading_signal.emit()
             # QApplication.processEvents()
-            # if not is_file_exists(self.models_path[model_name]):
-            #     download_file(model_name, self.models_path[model_name], self.models_data[model_name]['hash'], self.models_data[model_name]['url'])
+            if not is_file_exists(self.models_path[model_name]):
+                print(f"Downloading missing model {model_name} to {self.models_path[model_name]} ...")
+                download_file(model_name, self.models_path[model_name], self.models_data[model_name]['hash'], self.models_data[model_name]['url'])
+                print(f"Download complete!")
             if session_options is None:
                 model_instance = onnxruntime.InferenceSession(self.models_path[model_name], providers=self.providers)
             else:
@@ -146,7 +185,7 @@ class ModelsProcessor(QtCore.QObject):
         with self.model_lock:
             if not self.dfm_models.get(dfm_model):
                 self.main_window.model_loading_signal.emit()
-                max_models_to_keep = self.main_window.control['MaxDFMModelsSlider']
+                max_models_to_keep = self.controls['MaxDFMModelsSlider']
                 total_loaded_models = len(self.dfm_models)
                 if total_loaded_models==max_models_to_keep:
                     print("Clearing DFM Model")

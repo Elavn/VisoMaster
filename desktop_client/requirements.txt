@@ -1,0 +1,6 @@
+opencv-python
+websockets
+pyvirtualcam
+PySide6
+requests
+requests-toolbelt
