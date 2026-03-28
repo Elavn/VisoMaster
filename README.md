@@ -54,7 +54,7 @@ Both the GUI desktop app and the headless cloud server share **exactly the same*
 ### 1. Clone this fork
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/VisoMaster.git
+git clone https://github.com/Elavn/VisoMaster.git
 cd VisoMaster
 ```
 
