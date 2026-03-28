@@ -1,136 +1,260 @@
+# VisoMaster — Headless Cloud Edition
 
-# VisoMaster 
-### VisoMaster is a powerful yet easy-to-use tool for face swapping and editing in images and videos. It utilizes AI to produce natural-looking results with minimal effort, making it ideal for both casual users and professionals.  
-
----
-<img src=".github/screenshot.png" height="auto"/>
-
-## Features  
-
-### 🔄 **Face Swap**  
-- Supports multiple face swapper models  
-- Compatible with DeepFaceLab trained models (DFM)  
-- Advanced multi-face swapping with masking options for each facial part  
-- Occlusion masking support (DFL XSeg Masking)  
-- Works with all popular face detectors & landmark detectors  
-- Expression Restorer: Transfers original expressions to the swapped face  
-- Face Restoration: Supports all popular upscaling & enhancement models  
-
-### 🎭 **Face Editor (LivePortrait Models)**  
-- Manually adjust expressions and poses for different face parts  
-- Fine-tune colors for Face, Hair, Eyebrows, and Lips using RGB adjustments  
-
-### 🚀 **Other Powerful Features**  
-- **Live Playback**: See processed video in real-time before saving  
-- **Face Embeddings**: Use multiple source faces for better accuracy & similarity  
-- **Live Swapping via Webcam**: Stream to virtual camera for Twitch, YouTube, Zoom, etc.  
-- **User-Friendly Interface**: Intuitive and easy to use  
-- **Video Markers**: Adjust settings per frame for precise results  
-- **TensorRT Support**: Leverages supported GPUs for ultra-fast processing  
-- **Many More Advanced Features** 🎉  
-
-## Automatic Installation (Windows)
-- For Windows users with an Nvidia GPU, we provide an automatic installer for easy set up. 
-- You can get the installer from the [releases](https://github.com/visomaster/VisoMaster/releases/tag/v0.1.1) page or from this [link](https://github.com/visomaster/VisoMaster/releases/download/v0.1.1/VisoMaster_Setup.exe).
-- Choose the correct CUDA version inside the installer based on your GPU Compatibility.
-- After successful installation, go to your installed directory and run the **Start_Portable.bat** file to launch **VisoMaster**
-
-## **Manual Installation Guide (Nvidia)**
-
-Follow the steps below to install and run **VisoMaster** on your system.
-
-## **Prerequisites**
-Before proceeding, ensure you have the following installed on your system:
-- **Git** ([Download](https://git-scm.com/downloads))
-- **Miniconda** ([Download](https://www.anaconda.com/download))
+> A fork of [visomaster/VisoMaster](https://github.com/visomaster/VisoMaster) refactored for GPU-cloud deployment.  
+> Run real-time AI face swapping on **Modal.com** serverless GPUs — no local GPU required.
 
 ---
 
-## **Installation Steps**
+## What This Fork Does Differently
 
-### **1. Clone the Repository**  
-Open a terminal or command prompt and run:  
-```sh
-git clone https://github.com/visomaster/VisoMaster.git
+The original VisoMaster is a PySide6 desktop app where the entire inference core (`ModelsProcessor`, `FrameWorker`) is tightly coupled to the GUI's `MainWindow`. This fork decouples that relationship and introduces a **clean shared processing core** that both the GUI and a headless cloud server can use without modification.
+
+### Key Changes
+
+| File | Change |
+|---|---|
+| `app/processors/processing_core.py` | **New.** Shared `ProcessingCore` class. Owns `ModelsProcessor` and exposes `embed_face()` and `process_frame()`. No UI imports. |
+| `app/processors/models_processor.py` | Refactored. `__init__` now takes `controls: dict, parameters: dict` instead of `main_window: MainWindow` |
+| `app/processors/workers/frame_worker.py` | Refactored. `__init__` now takes `control: dict, parameters: dict, models_processor` instead of `main_window` |
+| `app/ui/main_ui.py` | Updated to instantiate `ProcessingCore(controls, parameters)` instead of `ModelsProcessor(self)` |
+| `headless_engine.py` | Rewritten. Uses `ProcessingCore` directly. No Qt mocking. No `FrameWorker.__new__` hacks. |
+| `modal_server.py` | FastAPI + WebSocket server. Deploys `HeadlessEngine` on Modal A10G GPU. |
+| `desktop_client/` | Lightweight Python client. Captures webcam → streams to Modal → outputs to virtual camera. |
+
+---
+
+## Architecture
+
 ```
-```sh
+┌─────────────────────────────────────────────────────────┐
+│                    Desktop Client                        │
+│  Webcam → JPEG encode → WebSocket → DroidCam/VirtualCam │
+└───────────────────────┬─────────────────────────────────┘
+                        │  WebSocket (JPEG frames)
+                        ▼
+┌─────────────────────────────────────────────────────────┐
+│              Modal GPU Server (A10G)                     │
+│  FastAPI WebSocket → HeadlessEngine → ProcessingCore     │
+│                                    → ModelsProcessor     │
+│                                    → FrameWorker         │
+└─────────────────────────────────────────────────────────┘
+
+GUI path (unchanged UX):
+  MainWindow → ProcessingCore(controls, parameters)
+                    └── ModelsProcessor
+                    └── FrameWorker
+```
+
+Both the GUI desktop app and the headless cloud server share **exactly the same** `ProcessingCore` — no divergence, no adapter hacks.
+
+---
+
+## Quick Start
+
+### 1. Clone this fork
+
+```bash
+git clone https://github.com/YOUR_USERNAME/VisoMaster.git
 cd VisoMaster
 ```
 
-### **2. Create and Activate a Conda Environment**  
-```sh
-conda create -n visomaster python=3.10.13 -y
-```
-```sh
+### 2. Install dependencies
+
+```bash
+conda create -n visomaster python=3.10.13
 conda activate visomaster
-```
-
-### **3. Install CUDA and cuDNN**  
-```sh
-conda install -c nvidia/label/cuda-12.4.1 cuda-runtime
-```
-```sh
-conda install -c conda-forge cudnn
-```
-
-### **4. Install Additional Dependencies**  
-```sh
-conda install scikit-image
-```
-```sh
+conda install cuda cudnn -c nvidia
 pip install -r requirements_cu124.txt
 ```
 
-### **5. Download Models and Other Dependencies**  
-1. Download all the required models
-```sh
+### 3. Download models
+
+```bash
 python download_models.py
 ```
-2. Download all the files from this [page](https://github.com/visomaster/visomaster-assets/releases/tag/v0.1.0_dp) and copy it to the ***dependencies/*** folder.
 
-  **Note**: You do not need to download the Source code (zip) and Source code (tar.gz) files 
-### **6. Run the Application**  
-Once everything is set up, start the application by opening the **Start.bat** file.
-On Linux just run `python main.py`.
+### 4a. Run the desktop GUI (unchanged from original)
+
+```bash
+python main.py
+```
+
+### 4b. Deploy to Modal (headless cloud)
+
+```bash
+pip install modal
+modal setup        # authenticate once
+modal deploy modal_server.py
+```
+
+This gives you a `wss://` endpoint URL. Copy it.
+
+### 5. Run the desktop client (connects to Modal)
+
+```bash
+cd desktop_client
+pip install -r requirements.txt
+python main.py --server wss://YOUR-APP.modal.run/swap
+```
+
+Your webcam feed is now face-swapped in real-time on a cloud GPU and output to a virtual camera — visible to WhatsApp, Zoom, Google Meet, or any app that reads your camera.
+
 ---
 
-## **Troubleshooting**
-- If you face CUDA-related issues, ensure your GPU drivers are up to date.
-- For missing models, double-check that all models are placed in the correct directories.
+## Configuration
 
-## [Join Discord](https://discord.gg/5rx4SQuDbp)
+All inference settings are controlled through two plain dicts — no GUI required on the server side.
 
-## Support The Project ##
-This project was made possible by the combined efforts of **[@argenspin](https://github.com/argenspin)** and **[@Alucard24](https://github.com/alucard24)** with the support of countless other members in our Discord community. If you wish to support us for the continued development of **Visomaster**, you can donate to either of us (or Both if you're double Awesome :smiley: )
+### `headless_config.py`
 
-### **argenspin** ###
-- [BuyMeACoffee](https://buymeacoffee.com/argenspin)
-- BTC: bc1qe8y7z0lkjsw6ssnlyzsncw0f4swjgh58j9vrqm84gw2nscgvvs5s4fts8g
-- ETH: 0x967a442FBd13617DE8d5fDC75234b2052122156B
-### **Alucard24** ###
-- [BuyMeACoffee](https://buymeacoffee.com/alucard_24)
-- [PayPal](https://www.paypal.com/donate/?business=XJX2E5ZTMZUSQ&no_recurring=0&item_name=Support+us+with+a+donation!+Your+contribution+helps+us+continue+improving+and+providing+quality+content.+Thank+you!&currency_code=EUR)
-- BTC: 15ny8vV3ChYsEuDta6VG3aKdT6Ra7duRAc
+```python
+DEFAULT_CONTROLS = {
+    'ProvidersPrioritySelection': 'CUDA',
+    'DetectorModelSelection': 'RetinaFace',
+    'DetectorScoreSlider': 65,
+    'LandmarkDetectToggle': True,
+    'LandmarkDetectModelSelection': '2dfan4',
+    'RecognitionModelSelection': 'CSCSArcFace',
+    'SwapperModelSelection': 'Inswapper128',
+    'RestorerToggle': False,       # enable for higher quality, more GPU cost
+    'MaskTypeSelection': 'box',
+    'MaskBlurSlider': 20,
+    'ModelsDir': '/models',
+}
 
+DEFAULT_PARAMETERS = {
+    'FaceSwapperToggle': True,
+    'FaceSimilaritySlider': 60,
+    'RestorerToggle': False,
+    'FaceEditorToggle': False,     # LivePortrait — off for real-time speed
+}
+```
 
-## Disclaimer: ##
-**VisoMaster** is a hobby project that we are making available to the community as a thank you to all of the contributors ahead of us.
-We've copied the disclaimer from [Swap-Mukham](https://github.com/harisreedhar/Swap-Mukham) here since it is well-written and applies 100% to this repo.
- 
-We would like to emphasize that our swapping software is intended for responsible and ethical use only. We must stress that users are solely responsible for their actions when using our software.
+Swap `RestorerToggle: True` to enable GFPGAN enhancement at the cost of ~20ms extra per frame.
 
-Intended Usage: This software is designed to assist users in creating realistic and entertaining content, such as movies, visual effects, virtual reality experiences, and other creative applications. We encourage users to explore these possibilities within the boundaries of legality, ethical considerations, and respect for others' privacy.
+---
 
-Ethical Guidelines: Users are expected to adhere to a set of ethical guidelines when using our software. These guidelines include, but are not limited to:
+## GPU Cost on Modal
 
-Not creating or sharing content that could harm, defame, or harass individuals. Obtaining proper consent and permissions from individuals featured in the content before using their likeness. Avoiding the use of this technology for deceptive purposes, including misinformation or malicious intent. Respecting and abiding by applicable laws, regulations, and copyright restrictions.
+Modal bills per second, only while your WebSocket is active. The container idles (and stops billing) 5 minutes after you disconnect.
 
-Privacy and Consent: Users are responsible for ensuring that they have the necessary permissions and consents from individuals whose likeness they intend to use in their creations. We strongly discourage the creation of content without explicit consent, particularly if it involves non-consensual or private content. It is essential to respect the privacy and dignity of all individuals involved.
+| Usage | GPU | Cost |
+|---|---|---|
+| 1 hr call/day | A10G | ~$2.10/day |
+| 2 hrs call/day | A10G | ~$4.20/day |
+| Casual use (~10 hrs/month) | A10G | ~$2.10/month |
+| **Modal free tier** | — | **$30/month credit** |
 
-Legal Considerations: Users must understand and comply with all relevant local, regional, and international laws pertaining to this technology. This includes laws related to privacy, defamation, intellectual property rights, and other relevant legislation. Users should consult legal professionals if they have any doubts regarding the legal implications of their creations.
+The $30 monthly free credit covers approximately **14 hours of active GPU time** — enough for daily personal use.
 
-Liability and Responsibility: We, as the creators and providers of the deep fake software, cannot be held responsible for the actions or consequences resulting from the usage of our software. Users assume full liability and responsibility for any misuse, unintended effects, or abusive behavior associated with the content they create.
+---
 
-By using this software, users acknowledge that they have read, understood, and agreed to abide by the above guidelines and disclaimers. We strongly encourage users to approach this technology with caution, integrity, and respect for the well-being and rights of others.
+## Desktop Client → Virtual Camera → WhatsApp
 
-Remember, technology should be used to empower and inspire, not to harm or deceive. Let's strive for ethical and responsible use of deep fake technology for the betterment of society.
+```
+Webcam (your face)
+    ↓
+desktop_client/main.py    ← captures at 640×480, 15fps
+    ↓ WebSocket JPEG
+Modal GPU (VisoMaster inference)
+    ↓ WebSocket JPEG (swapped face)
+pyvirtualcam              ← pushes to virtual camera
+    ↓
+DroidCam Virtual Camera   ← WhatsApp, Zoom, Meet see this
+```
+
+### DroidCam Setup (Windows)
+
+1. Install [DroidCam OBS](https://www.dev47apps.com/droidcam/obs/)
+2. It registers as a system virtual camera
+3. Select **DroidCam** as your camera in WhatsApp/Zoom
+4. Start `desktop_client/main.py` — it writes to DroidCam automatically
+
+---
+
+## File Structure
+
+```
+VisoMaster/
+│
+├── main.py                          ← Original GUI entry point (unchanged)
+├── modal_server.py                  ← Modal deployment + WebSocket API
+├── headless_engine.py               ← Clean headless wrapper (no Qt)
+├── headless_config.py               ← Default controls + parameters dicts
+├── download_models.py               ← Model downloader
+│
+├── app/
+│   ├── processors/
+│   │   ├── processing_core.py       ← ★ NEW — shared inference core
+│   │   ├── models_processor.py      ← Refactored (dict-based, no MainWindow)
+│   │   ├── face_detectors.py
+│   │   ├── face_swappers.py
+│   │   ├── face_restorers.py
+│   │   ├── face_editors.py          ← LivePortrait
+│   │   ├── face_masks.py
+│   │   ├── frame_enhancers.py
+│   │   ├── models_data.py           ← Full model catalog
+│   │   └── workers/
+│   │       └── frame_worker.py      ← Refactored (dict-based, no MainWindow)
+│   │
+│   ├── ui/                          ← Original GUI (unchanged UX)
+│   └── helpers/
+│       ├── downloader.py
+│       └── miscellaneous.py
+│
+├── desktop_client/
+│   ├── main.py                      ← Webcam capture + WebSocket client
+│   ├── streamer.py                  ← VisoStreamer class
+│   └── requirements.txt
+│
+└── model_assets/                    ← ONNX model configs
+```
+
+---
+
+## Supported Models
+
+### Face Detection
+- RetinaFace, SCRFD, YOLOv8, Yunet
+
+### Face Swapping
+- Inswapper128, InStyleSwapper, SimSwap, GhostFace
+
+### Face Enhancement
+- GFPGAN, CodeFormer
+
+### Face Editing
+- LivePortrait (expression/pose control)
+
+### Landmark Detection
+- 5-point, 68-point, 106-point, 203-point, 478-point
+
+---
+
+## Latency Expectations
+
+Real-time performance depends on your distance to the Modal datacenter. Use the **EU region** for lowest latency from Africa and Europe.
+
+| Component | Time |
+|---|---|
+| Frame encode (local) | ~5ms |
+| Network (Lagos → EU Modal) | ~80–150ms |
+| GPU inference (A10G) | ~30–60ms |
+| Network return + decode | ~80–150ms |
+| **Total round-trip** | **~200–400ms** |
+
+This produces a slight but visible delay on video calls — comparable to a mildly laggy internet connection. Audio is unaffected.
+
+---
+
+## Credits
+
+- **Original project**: [visomaster/VisoMaster](https://github.com/visomaster/VisoMaster) — GPL-3.0
+- **Inference models**: InsightFace, GFPGAN, CodeFormer, LivePortrait
+- **Cloud infrastructure**: [Modal.com](https://modal.com)
+
+---
+
+## License
+
+GPL-3.0 — same as the original. See [LICENSE](./LICENSE).
